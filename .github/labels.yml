@@ -1,0 +1,111 @@
+# Vocabulario de labels para el triage automático de issues.
+#
+# Este archivo es la fuente de verdad que consulta el workflow
+# `.github/workflows/claude-issue-triage.yml`: Claude solo puede asignar
+# labels definidos aquí, nunca inventar uno nuevo.
+#
+# Campos:
+#   name        nombre exacto del label en GitHub
+#   color       hex sin '#'
+#   description texto que se muestra en la UI de GitHub
+#   when        criterio que usa Claude para decidir si aplica (no se sube a GitHub)
+
+# --- Tipo (elegir exactamente uno) ---------------------------------------
+- name: bug
+  color: d73a4a
+  description: Something isn't working
+  when: El juego se comporta distinto de lo esperado (colisiones, colores, controles, puntuación, render).
+
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+  when: Se pide una mecánica, opción o mejora que hoy no existe.
+
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+  when: El problema es sobre README.md, CLAUDE.md o comentarios, no sobre el comportamiento del juego.
+
+- name: question
+  color: d876e3
+  description: Further information is requested
+  when: El issue es una pregunta sobre el funcionamiento del proyecto, no reporta un problema.
+
+# --- Área (elegir uno o más) -----------------------------------------------
+- name: area:gameplay
+  color: 5319e7
+  description: Mecánicas de juego (colisiones, rotación, wall kicks, scoring, niveles)
+  when: Involucra collide, tryRotate, rotateCW, clearLines, lockPiece, scoring o leveling en game.js.
+
+- name: area:rendering
+  color: 1d76db
+  description: Dibujo en canvas (colores, piezas, ghost piece, preview)
+  when: Involucra COLORS, PIECES, draw, drawGhost, next-canvas o el canvas #board.
+
+- name: area:ui
+  color: bfd4f2
+  description: Panel lateral, overlay, layout o estilos
+  when: Involucra index.html (panel, overlay) o style.css sin tocar la lógica de game.js.
+
+- name: area:controls
+  color: c5def5
+  description: Entrada de teclado (mover, rotar, pausa, drop)
+  when: Involucra el listener de teclado, pausa (P) o hard/soft drop.
+
+- name: area:performance
+  color: fbca04
+  description: Loop de juego, requestAnimationFrame, dropInterval
+  when: Involucra el loop, dropAccum, dropInterval o fluidez/velocidad percibida.
+
+# --- Prioridad (elegir exactamente uno) ------------------------------------
+- name: priority:high
+  color: b60205
+  description: El juego queda injugable o roto
+  when: Bloquea jugar (crashea, no responde, tablero corrupto, piezas no aparecen).
+
+- name: priority:medium
+  color: e99695
+  description: Afecta la experiencia sin bloquear el juego
+  when: Molesto o incorrecto pero el juego sigue siendo jugable.
+
+- name: priority:low
+  color: f9d0c4
+  description: Cosmético o de bajo impacto
+  when: Detalle visual o menor (p. ej. un color ligeramente distinto al esperado).
+
+# --- Estado -----------------------------------------------------------------
+- name: needs-info
+  color: cfd3d7
+  description: Falta información para diagnosticar o reproducir el problema
+  when: El issue no tiene suficiente detalle (sin pasos de reproducción, sin descripción clara) para identificar la causa.
+
+# --- Ya existentes en el repo, se mantienen sin cambios --------------------
+- name: accessibility
+  color: f143ab
+  description: Barrier affecting people with disabilities
+  when: Afecta a personas con discapacidad (contraste, foco de teclado, lectores de pantalla).
+
+- name: good first issue
+  color: "7057ff"
+  description: Good for newcomers
+  when: Cambio acotado y sencillo, buen candidato para un primer aporte.
+
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+  when: Ya existe otro issue abierto que reporta lo mismo.
+
+- name: invalid
+  color: e4e669
+  description: This doesn't seem right
+  when: El reporte no corresponde a un problema real del proyecto.
+
+- name: help wanted
+  color: "008672"
+  description: Extra attention is needed
+  when: Se pide colaboración externa explícita.
+
+- name: wontfix
+  color: ffffff
+  description: This will not be worked on
+  when: Se decidió conscientemente no abordarlo.
