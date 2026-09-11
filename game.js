@@ -67,6 +67,29 @@ const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
 const overlayScore = document.getElementById("overlay-score");
 const restartBtn = document.getElementById("restart-btn");
+const themeToggleBtn = document.getElementById("theme-toggle");
+
+const THEME_STORAGE_KEY = "tetris-theme";
+
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  document.body.classList.toggle("light-theme", isLight);
+  themeToggleBtn.setAttribute("aria-pressed", String(isLight));
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  applyTheme(saved === "light" ? "light" : "dark");
+}
+
+themeToggleBtn.addEventListener("click", () => {
+  const isLight = document.body.classList.contains("light-theme");
+  const nextTheme = isLight ? "dark" : "light";
+  applyTheme(nextTheme);
+  localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+});
+
+initTheme();
 
 let board,
   current,
@@ -213,7 +236,9 @@ function drawBlock(context, x, y, colorIndex, size, alpha) {
 }
 
 function drawGrid() {
-  ctx.strokeStyle = "#22222e";
+  ctx.strokeStyle = getComputedStyle(document.body)
+    .getPropertyValue("--grid-line")
+    .trim();
   ctx.lineWidth = 0.5;
   for (let c = 1; c < COLS; c++) {
     ctx.beginPath();
