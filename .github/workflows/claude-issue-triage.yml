@@ -92,7 +92,14 @@ jobs:
                - Nunca quites un label que ya haya puesto una persona.
 
             6. Publica UN comentario (`gh issue comment ${{ github.event.issue.number }} --body-file <archivo>`)
-               en español, con esta estructura exacta:
+               en español, con esta estructura exacta. El comentario debe estar
+               escrito en Markdown claro y bien formado, usando la sintaxis que
+               GitHub renderiza correctamente (encabezados con `##`, negritas con
+               `**texto**`, listas con `-`, bloques de código con acento grave
+               simple para símbolos/archivos y triple acento grave con el lenguaje
+               para fragmentos de código, enlaces `archivo:línea` como texto en
+               línea): que se vea prolijo al renderizarse en la interfaz del issue,
+               no como texto plano:
 
                ## Diagnóstico automático
 
