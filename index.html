@@ -8,7 +8,18 @@
   </head>
   <body>
     <div class="wrapper">
-      <h1 class="game-title">TETRIS</h1>
+      <div class="title-bar">
+        <h1 class="game-title">TETRIS</h1>
+        <button
+          id="theme-toggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="Cambiar tema claro/oscuro"
+          aria-pressed="false"
+        >
+          <span class="knob"></span>
+        </button>
+      </div>
       <div class="game-container">
         <canvas id="board" width="300" height="600"></canvas>
 
