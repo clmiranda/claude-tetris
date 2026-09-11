@@ -1,0 +1,123 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # No re-disparar sobre acciones hechas por bots (p. ej. este mismo workflow
+    # comentando/etiquetando no dispara `edited`, pero esto queda como guard extra).
+    if: github.event.sender.type != 'Bot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # asignar labels y comentar el diagnóstico
+      id-token: write # requerido por claude-code-action
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Sync labels from .github/labels.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          count=$(yq '. | length' .github/labels.yml)
+          for i in $(seq 0 $((count - 1))); do
+            name=$(yq -r ".[$i].name" .github/labels.yml)
+            color=$(yq -r ".[$i].color" .github/labels.yml)
+            desc=$(yq -r ".[$i].description" .github/labels.yml)
+            gh label create "$name" --color "$color" --description "$desc" --force
+          done
+
+      - name: Run Claude issue triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*)"'
+
+          prompt: |
+            Estás haciendo triage automático del issue #${{ github.event.issue.number }}
+            del repositorio ${{ github.repository }} (evento: `${{ github.event.action }}`).
+
+            Contexto del proyecto: es un Tetris en JavaScript vanilla (`game.js`,
+            `index.html`, `style.css`, sin build ni tests). Lee `CLAUDE.md` en la raíz
+            del repo antes de investigar: documenta el modelo del tablero, `PIECES`,
+            `COLORS`, `collide`, `tryRotate`, el game loop y el scoring — es el mapa
+            para ubicar rápido la causa de cualquier issue.
+
+            Pasos:
+
+            1. Lee el issue completo:
+               `gh issue view ${{ github.event.issue.number }} --json title,body,comments,labels`
+
+            2. Lee `.github/labels.yml`. Es la ÚNICA fuente de labels permitidos —
+               cada entrada tiene `name`, `description` y `when` (criterio de uso).
+               No inventes ni crees labels fuera de esa lista.
+
+            3. Investiga el código con Read/Grep/Glob hasta identificar el archivo y
+               el símbolo/línea responsables del problema descrito. No especules: si
+               no logras ubicar la causa exacta, dilo explícitamente en el diagnóstico
+               en vez de inventar una.
+
+            4. Si el issue NO tiene información suficiente para diagnosticar (sin
+               pasos de reproducción, descripción vaga, etc.):
+               - Aplica el label `needs-info` además del de tipo que corresponda.
+               - Comenta pidiendo específicamente lo que falta (pasos de
+                 reproducción, capturas, navegador, etc.), sin inventar un
+                 diagnóstico.
+               Si SÍ hay información suficiente, continúa con los pasos 5 y 6.
+
+            5. Asigna labels con `gh issue edit ${{ github.event.issue.number }} --add-label "..."`,
+               siguiendo estas reglas:
+               - Exactamente un label de tipo: `bug`, `enhancement`, `documentation`
+                 o `question`.
+               - Uno o más labels de área: `area:gameplay`, `area:rendering`,
+                 `area:ui`, `area:controls`, `area:performance`.
+               - Exactamente un label de prioridad: `priority:high`,
+                 `priority:medium`, `priority:low`.
+               - Usa `accessibility` si aplica.
+               - Nunca quites un label que ya haya puesto una persona.
+
+            6. Publica UN comentario (`gh issue comment ${{ github.event.issue.number }} --body-file <archivo>`)
+               en español, con esta estructura exacta:
+
+               ## Diagnóstico automático
+
+               **Resumen:** (el problema en una frase)
+
+               **Diagnóstico:** (causa raíz probable, citando archivo:línea y el
+               símbolo concreto involucrado)
+
+               **Enfoque propuesto:** (qué cambiar y por qué, sin escribir el parche
+               completo)
+
+               **Riesgos / efectos colaterales:** (qué otra parte del código toca
+               ese cambio)
+
+               **Verificación:** (cómo comprobar el arreglo a mano — el repo no
+               tiene tests, así que es abrir el juego y reproducir el caso)
+
+               **Confianza:** alta / media / baja — si no es alta, qué información
+               falta para subirla.
+
+               Cierra el comentario indicando que para implementar la solución basta
+               con comentar `@claude` en este issue.
+
+            7. Si el evento es una edición (`${{ github.event.action }}` == `edited`)
+               y ya existe un comentario de diagnóstico previo (con el encabezado
+               "## Diagnóstico automático"), publica el diagnóstico actualizado
+               señalando explícitamente qué cambió respecto al comentario anterior,
+               en vez de repetirlo desde cero.
