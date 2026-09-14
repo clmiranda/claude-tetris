@@ -25,8 +25,8 @@ Three files, no modules/bundler — `game.js` is loaded directly by `index.html`
 - **`index.html`** — DOM structure: `<canvas id="board">` (300×600, the 10×20 grid at `BLOCK=30`px/cell), a side panel (`#score`, `#lines`, `#level`, `#next-canvas`), and a shared `#overlay` used for both Pause and Game Over.
 - **`style.css`** — dark/retro arcade visual theme only; no layout logic worth tracking here.
 - **`game.js`** — all game logic, structured around this state machine:
-  - **Board model**: `board` is a `ROWS × COLS` matrix; `0` = empty, `1–7` = a piece color index (indexes into `COLORS`, matching `PIECES`).
-  - **Pieces**: the 7 tetrominoes are hardcoded square matrices in `PIECES`. Rotation (`rotateCW`) is a matrix transpose+reverse, not per-piece rotation tables.
+  - **Board model**: `board` is a `ROWS × COLS` matrix; `0` = empty, `1–8` = a piece color index (indexes into `COLORS`, matching `PIECES`).
+  - **Pieces**: the 7 tetrominoes plus the 3×3 "nut" piece (hollow center) are hardcoded square matrices in `PIECES`. Rotation (`rotateCW`) is a matrix transpose+reverse, not per-piece rotation tables.
   - **Collision** (`collide`): bounds + board-overlap check, used for movement, rotation, and drop logic alike.
   - **Wall kicks** (`tryRotate`): after rotating, tries offsets `[0, -1, 1, -2, 2]` until one doesn't collide.
   - **Game loop** (`loop`): driven by `requestAnimationFrame`, accumulates elapsed time in `dropAccum` and advances the piece when it exceeds `dropInterval`.
