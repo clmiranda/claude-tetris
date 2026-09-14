@@ -78,6 +78,14 @@ const SPECIALS = {
   freeze: { icon: "❄", color: "#80deea" },
 };
 
+const COMBO_MAX = 5; // cap for the consecutive-clear score multiplier
+const TSPIN_SCORES = [400, 800, 1200, 1600]; // T-spin with 0..3 lines (× level)
+const B2B_MULT = 1.5; // back-to-back Tetris / T-spin multiplier
+const PERFECT_CLEAR_SCORE = 3000; // bonus for emptying the board (× level)
+const POPUP_MS = 1000; // lifetime of floating score text
+const CLEAR_NAMES = ["", "SINGLE", "DOUBLE", "TRIPLE", "TETRIS"];
+const SOUND_STORAGE_KEY = "tetris-sound";
+
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const nextCanvas = document.getElementById("next-canvas");
@@ -91,6 +99,7 @@ const overlayTitle = document.getElementById("overlay-title");
 const overlayScore = document.getElementById("overlay-score");
 const restartBtn = document.getElementById("restart-btn");
 const themeToggleBtn = document.getElementById("theme-toggle");
+const soundToggleBtn = document.getElementById("sound-toggle");
 
 const THEME_STORAGE_KEY = "tetris-theme";
 
@@ -114,6 +123,75 @@ themeToggleBtn.addEventListener("click", () => {
 
 initTheme();
 
+// ---- Sound (synthesized with Web Audio, no asset files) ----
+let soundOn = localStorage.getItem(SOUND_STORAGE_KEY) !== "off";
+let audioCtx = null;
+
+function applySound() {
+  soundToggleBtn.textContent = soundOn ? "🔊" : "🔇";
+  soundToggleBtn.setAttribute("aria-pressed", String(soundOn));
+}
+
+soundToggleBtn.addEventListener("click", () => {
+  soundOn = !soundOn;
+  applySound();
+  localStorage.setItem(SOUND_STORAGE_KEY, soundOn ? "on" : "off");
+  // drop focus so Space (hard drop) doesn't re-trigger the button
+  soundToggleBtn.blur();
+});
+
+applySound();
+
+// the context is created lazily: sounds only play after a keypress, which
+// satisfies the browser autoplay policy
+function getAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function tone(ac, freq, start, dur, type = "square", gain = 0.06) {
+  const t0 = ac.currentTime + start;
+  const osc = ac.createOscillator();
+  const amp = ac.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(gain, t0 + 0.005);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(amp).connect(ac.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+
+function sfx(kind, comboLevel = 1) {
+  if (!soundOn) return;
+  const ac = getAudio();
+  if (!ac) return;
+  const arpeggio = (notes, step, type) =>
+    notes.forEach((f, i) => tone(ac, f, i * step, 0.18, type, 0.07));
+  switch (kind) {
+    case "clear":
+      // one whole tone higher per combo step, so chaining is audible
+      tone(ac, 330 * 2 ** (((comboLevel - 1) * 2) / 12), 0, 0.15);
+      break;
+    case "tetris":
+    case "tspin":
+      arpeggio([523, 659, 784], 0.06, "triangle");
+      break;
+    case "b2b":
+      arpeggio([523, 659, 784, 1047], 0.06, "triangle");
+      break;
+    case "perfect":
+      arpeggio([523, 659, 784, 1047], 0.11, "square");
+      break;
+  }
+}
+
 let board,
   current,
   next,
@@ -131,7 +209,11 @@ let board,
   nextSpecialAt, // line count at which the next special piece is queued
   pendingSpecial, // true when the next generated piece must be special
   freezeTimer, // ms of gravity pause left from the freeze powerup
-  flash; // { cells: [[r, c]...], elapsed } while a powerup flash is fading, else null
+  flash, // { cells: [[r, c]...], elapsed } while a powerup flash is fading, else null
+  combo, // consecutive line-clearing locks, capped at COMBO_MAX (score multiplier)
+  b2bActive, // last line clear was "difficult" (Tetris or T-spin)
+  lastMoveRotate, // last successful action on the current piece was a rotation
+  popups; // floating score texts: [{ lines: [text], y, elapsed }]
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -188,6 +270,7 @@ function tryRotate() {
     if (!collide(rotated, current.x + kick, current.y)) {
       current.shape = rotated;
       current.x += kick;
+      lastMoveRotate = true;
       return;
     }
   }
@@ -210,12 +293,12 @@ function clearLines() {
       r++;
     }
   }
-  if (cleared) awardLines(cleared);
+  return cleared;
 }
 
+// line/level progress only; points are computed in scoreLock
 function awardLines(n) {
   lines += n;
-  score += (LINE_SCORES[n] || 0) * level;
   level = Math.floor(lines / 10) + 1;
   dropInterval = Math.max(100, 1000 - (level - 1) * 90);
   while (lines >= nextSpecialAt) {
@@ -254,9 +337,11 @@ function mostFrequentColor() {
   return best;
 }
 
+// returns the number of lines removed directly by the effect (bolt row)
 function applySpecial() {
   const { x, y } = current;
   const hit = [];
+  let removedLines = 0;
   let flashCells = [];
   switch (current.special) {
     case "bomb":
@@ -278,7 +363,7 @@ function applySpecial() {
       }
       board.splice(y, 1);
       board.unshift(new Array(COLS).fill(0));
-      awardLines(1);
+      removedLines = 1;
       break;
     case "tint": {
       const target = board[y + 1]?.[x] || mostFrequentColor();
@@ -304,6 +389,7 @@ function applySpecial() {
   score += hit.length * BLOCK_CLEAR_SCORE * level;
   if (flashCells.length) flash = { cells: flashCells, elapsed: 0 };
   updateHUD();
+  return removedLines;
 }
 
 function ghostY() {
@@ -315,6 +401,7 @@ function ghostY() {
 function hardDrop() {
   const gy = ghostY();
   score += (gy - current.y) * 2;
+  if (gy > current.y) lastMoveRotate = false;
   current.y = gy;
   if (gy - renderY < 0.01) {
     lockPiece();
@@ -327,6 +414,7 @@ function hardDrop() {
 function softDrop() {
   if (!collide(current.shape, current.x, current.y + 1)) {
     current.y++;
+    lastMoveRotate = false;
     score += 1;
     updateHUD();
   } else {
@@ -335,15 +423,95 @@ function softDrop() {
 }
 
 function lockPiece() {
-  if (current.special) applySpecial();
+  const special = !!current.special;
+  const tspin = isTSpin();
+  const row = current.y;
+  let cleared = 0;
+  if (special) cleared = applySpecial();
   else merge();
-  clearLines();
+  cleared += clearLines();
+  scoreLock(cleared, tspin, special, row);
   spawn();
+}
+
+// 3-corner rule: a T locked right after a rotation with ≥3 occupied diagonal corners
+function isTSpin() {
+  if (current.special || current.type !== 3 || !lastMoveRotate) return false;
+  const cx = current.x + 1;
+  const cy = current.y + 1;
+  let corners = 0;
+  for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const x = cx + dx;
+    const y = cy + dy;
+    if (x < 0 || x >= COLS || y >= ROWS || (y >= 0 && board[y][x])) corners++;
+  }
+  return corners >= 3;
+}
+
+function scoreLock(cleared, tspin, special, row) {
+  if (!cleared) {
+    if (tspin) {
+      const points = TSPIN_SCORES[0] * level;
+      score += points;
+      popup(["T-SPIN", `+${points.toLocaleString()}`], row);
+      sfx("tspin");
+      updateHUD();
+    }
+    // powerups are neutral: only a normal piece that clears nothing breaks the chain
+    if (!special) combo = 0;
+    return;
+  }
+
+  awardLines(cleared);
+  const difficult = tspin || cleared === 4;
+  const b2b = difficult && b2bActive;
+  b2bActive = difficult;
+  let points = (tspin ? TSPIN_SCORES[cleared] : LINE_SCORES[cleared]) * level;
+  if (b2b) points *= B2B_MULT;
+  const perfect = board.every((r) => r.every((v) => !v));
+  if (perfect) points += PERFECT_CLEAR_SCORE * level;
+  combo = Math.min(combo + 1, COMBO_MAX);
+  points = Math.round(points * combo);
+  score += points;
+  updateHUD();
+
+  const text = [];
+  if (difficult)
+    text.push(`${b2b ? "B2B " : ""}${tspin ? "T-SPIN " : ""}${CLEAR_NAMES[cleared]}`);
+  if (combo >= 2) text.push(`COMBO x${combo}`);
+  if (perfect) text.push("PERFECT CLEAR");
+  if (text.length) {
+    text.push(`+${points.toLocaleString()}`);
+    popup(text, row);
+  }
+
+  let intensity = combo >= 2 ? 1 + combo : 0;
+  if (difficult) intensity = Math.max(intensity, 4);
+  if (perfect) intensity = 8;
+  if (intensity) shake(intensity);
+
+  if (perfect) sfx("perfect");
+  else if (b2b) sfx("b2b");
+  else if (difficult) sfx(tspin ? "tspin" : "tetris");
+  else sfx("clear", combo);
+}
+
+function popup(text, row) {
+  popups.push({ lines: text, y: row * BLOCK, elapsed: 0 });
+  if (popups.length > 3) popups.shift();
+}
+
+function shake(px) {
+  canvas.style.setProperty("--shake", `${px}px`);
+  canvas.classList.remove("shake");
+  void canvas.offsetWidth; // restart the CSS animation
+  canvas.classList.add("shake");
 }
 
 function spawn() {
   current = next;
   renderY = current.y;
+  lastMoveRotate = false;
   next = pendingSpecial ? randomSpecial() : randomPiece();
   pendingSpecial = false;
   if (collide(current.shape, current.x, current.y)) {
@@ -443,6 +611,33 @@ function draw() {
 
   // current piece
   drawPiece(renderY);
+
+  drawPopups();
+}
+
+// floating combo/bonus text: rises and fades out over POPUP_MS
+function drawPopups() {
+  const LINE_H = 18;
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  for (const p of popups) {
+    const t = p.elapsed / POPUP_MS;
+    const height = p.lines.length * LINE_H;
+    const top = Math.min(Math.max(p.y - 30 * t, LINE_H), canvas.height - height);
+    ctx.globalAlpha = 1 - t * t;
+    p.lines.forEach((line, i) => {
+      const y = top + i * LINE_H;
+      const isPoints = i === p.lines.length - 1;
+      ctx.fillStyle = isPoints ? "#ffd54f" : "#ffffff";
+      ctx.strokeText(line, canvas.width / 2, y);
+      ctx.fillText(line, canvas.width / 2, y);
+    });
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawPiece(y, alpha) {
@@ -515,6 +710,7 @@ function loop(ts) {
       dropAccum = 0;
       if (!collide(current.shape, current.x, current.y + 1)) {
         current.y++;
+        lastMoveRotate = false;
       } else {
         lockPiece();
       }
@@ -526,6 +722,8 @@ function loop(ts) {
     if (Math.abs(current.y - renderY) < 0.01) renderY = current.y;
   }
   if (flash && (flash.elapsed += dt) >= FLASH_MS) flash = null;
+  for (const p of popups) p.elapsed += dt;
+  popups = popups.filter((p) => p.elapsed < POPUP_MS);
   draw();
   // endGame() can't cancel the frame currently running, so stop rescheduling here
   if (gameOver) return;
@@ -546,6 +744,10 @@ function init() {
   pendingSpecial = false;
   freezeTimer = 0;
   flash = null;
+  combo = 0;
+  b2bActive = false;
+  lastMoveRotate = false;
+  popups = [];
   lastTime = performance.now();
   next = randomPiece();
   spawn();
@@ -563,10 +765,16 @@ document.addEventListener("keydown", (e) => {
   if (paused || gameOver || hardDropAnim) return;
   switch (e.code) {
     case "ArrowLeft":
-      if (!collide(current.shape, current.x - 1, current.y)) current.x--;
+      if (!collide(current.shape, current.x - 1, current.y)) {
+        current.x--;
+        lastMoveRotate = false;
+      }
       break;
     case "ArrowRight":
-      if (!collide(current.shape, current.x + 1, current.y)) current.x++;
+      if (!collide(current.shape, current.x + 1, current.y)) {
+        current.x++;
+        lastMoveRotate = false;
+      }
       break;
     case "ArrowDown":
       softDrop();

@@ -40,6 +40,9 @@ Es una versión jugable del Tetris clásico con todas las mecánicas que esperar
 - **Pieza fantasma** (_ghost piece_): muestra dónde aterrizará la pieza actual.
 - **Vista previa** de la siguiente pieza.
 - **Sistema de puntuación** clásico de Tetris (100 / 300 / 500 / 800 multiplicado por nivel).
+- **Combos encadenados**: limpiar líneas en piezas consecutivas multiplica la puntuación (x2, x3… hasta x5).
+- **Bonus** por **T-spin**, **Back-to-Back** (Tetris o T-spin seguidos, ×1.5) y **Perfect Clear** (tablero vacío).
+- **Efectos**: texto flotante, sacudida del tablero y sonidos sintetizados con botón de silencio.
 - **Niveles** que aumentan cada 10 líneas y aceleran la caída.
 - **Pausa** y **Game Over** con opción de reinicio.
 
@@ -114,7 +117,7 @@ Contiene toda la lógica del juego. A grandes rasgos:
 - **Wall kicks** (`tryRotate`): si la rotación choca, intenta desplazar la pieza ±1 y ±2 columnas antes de descartar el giro.
 - **Game loop** (`loop`): basado en `requestAnimationFrame`, acumula el tiempo transcurrido y baja la pieza una fila cuando se supera `dropInterval`.
 - **Limpieza de líneas** (`clearLines`): recorre el tablero de abajo hacia arriba; cada fila completa se elimina y se inserta una vacía en la cima.
-- **Puntuación**: usa la tabla clásica `[0, 100, 300, 500, 800]` multiplicada por el nivel actual; el hard drop suma 2 puntos por celda recorrida y el soft drop 1 punto por fila.
+- **Puntuación**: usa la tabla clásica `[0, 100, 300, 500, 800]` multiplicada por el nivel actual; el hard drop suma 2 puntos por celda recorrida y el soft drop 1 punto por fila. Sobre esa base (`scoreLock`): los T-spin usan `[400, 800, 1200, 1600]`, un Tetris/T-spin tras otro aplica ×1.5 (B2B), vaciar el tablero suma 3000 × nivel y el total se multiplica por el combo actual (máx. x5).
 - **Nivel y velocidad**: el nivel sube cada 10 líneas; la velocidad de caída se calcula como `max(100, 1000 − (level − 1) × 90)` milisegundos.
 - **Ghost piece** (`ghostY`): proyecta la posición final de la pieza actual hacia abajo y la dibuja con `globalAlpha = 0.2`.
 

@@ -107,6 +107,29 @@ body {
   box-shadow: 0 0 40px var(--board-shadow);
 }
 
+#board.shake {
+  animation: board-shake 250ms ease-out;
+}
+
+@keyframes board-shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(calc(var(--shake, 4px) * -1), calc(var(--shake, 4px) * 0.5));
+  }
+  40% {
+    transform: translate(var(--shake, 4px), calc(var(--shake, 4px) * -0.5));
+  }
+  60% {
+    transform: translate(calc(var(--shake, 4px) * -0.6), calc(var(--shake, 4px) * 0.3));
+  }
+  80% {
+    transform: translate(calc(var(--shake, 4px) * 0.3), 0);
+  }
+}
+
 /* ---- Panel lateral ---- */
 .panel {
   width: 160px;
@@ -197,6 +220,19 @@ kbd {
 
 body.light-theme .theme-toggle .knob {
   transform: translateX(20px);
+}
+
+/* ---- Sound toggle ---- */
+.sound-toggle {
+  width: 32px;
+  height: 24px;
+  background: var(--toggle-bg);
+  border: 1px solid var(--toggle-border);
+  border-radius: 999px;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* ---- Overlay ---- */
