@@ -62,6 +62,10 @@ const PIECES = [
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
+const SLIDE_TAU = 35; // ms, smoothing time constant for the row-to-row slide
+const HARD_DROP_MS = 120; // duration of the hard drop fall animation
+const TRAIL_COPIES = 4; // fading copies drawn behind a hard-dropping piece
+
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const nextCanvas = document.getElementById("next-canvas");
@@ -108,7 +112,9 @@ let board,
   lastTime,
   dropAccum,
   dropInterval,
-  animId;
+  animId,
+  renderY, // visual (fractional) row of the current piece; logic uses current.y
+  hardDropAnim; // { fromY, toY, elapsed } while a hard drop is animating, else null
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -195,7 +201,12 @@ function hardDrop() {
   const gy = ghostY();
   score += (gy - current.y) * 2;
   current.y = gy;
-  lockPiece();
+  if (gy - renderY < 0.01) {
+    lockPiece();
+    return;
+  }
+  // lock is deferred until the fall animation finishes (see loop)
+  hardDropAnim = { fromY: renderY, toY: gy, elapsed: 0 };
 }
 
 function softDrop() {
@@ -216,6 +227,7 @@ function lockPiece() {
 
 function spawn() {
   current = next;
+  renderY = current.y;
   next = randomPiece();
   if (collide(current.shape, current.x, current.y)) {
     endGame();
@@ -269,16 +281,25 @@ function draw() {
     for (let c = 0; c < COLS; c++) drawBlock(ctx, c, r, board[r][c], BLOCK);
 
   // ghost
-  const gy = ghostY();
-  for (let r = 0; r < current.shape.length; r++)
-    for (let c = 0; c < current.shape[r].length; c++)
-      if (current.shape[r][c])
-        drawBlock(ctx, current.x + c, gy + r, current.shape[r][c], BLOCK, 0.2);
+  drawPiece(ghostY(), 0.2);
+
+  // hard drop trail: copies between the start row and the piece, fading upward
+  if (hardDropAnim) {
+    const span = renderY - hardDropAnim.fromY;
+    for (let k = 1; k <= TRAIL_COPIES; k++) {
+      const f = k / (TRAIL_COPIES + 1);
+      drawPiece(renderY - span * f, 0.25 * (1 - f));
+    }
+  }
 
   // current piece
+  drawPiece(renderY);
+}
+
+function drawPiece(y, alpha) {
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
-      drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+      drawBlock(ctx, current.x + c, y + r, current.shape[r][c], BLOCK, alpha);
 }
 
 function drawNext() {
@@ -318,14 +339,28 @@ function loop(ts) {
   if (gameOver || paused) return;
   const dt = ts - lastTime;
   lastTime = ts;
-  dropAccum += dt;
-  if (dropAccum >= dropInterval) {
-    dropAccum = 0;
-    if (!collide(current.shape, current.x, current.y + 1)) {
-      current.y++;
-    } else {
+  if (hardDropAnim) {
+    hardDropAnim.elapsed += dt;
+    const t = Math.min(1, hardDropAnim.elapsed / HARD_DROP_MS);
+    // ease-in so the fall accelerates
+    renderY = hardDropAnim.fromY + (hardDropAnim.toY - hardDropAnim.fromY) * t * t;
+    if (t >= 1) {
+      hardDropAnim = null;
       lockPiece();
     }
+  } else {
+    dropAccum += dt;
+    if (dropAccum >= dropInterval) {
+      dropAccum = 0;
+      if (!collide(current.shape, current.x, current.y + 1)) {
+        current.y++;
+      } else {
+        lockPiece();
+      }
+    }
+    // frame-rate independent exponential ease toward the logical row
+    renderY += (current.y - renderY) * (1 - Math.exp(-dt / SLIDE_TAU));
+    if (Math.abs(current.y - renderY) < 0.01) renderY = current.y;
   }
   draw();
   // endGame() can't cancel the frame currently running, so stop rescheduling here
@@ -342,6 +377,7 @@ function init() {
   gameOver = false;
   dropInterval = 1000;
   dropAccum = 0;
+  hardDropAnim = null;
   lastTime = performance.now();
   next = randomPiece();
   spawn();
@@ -356,7 +392,7 @@ document.addEventListener("keydown", (e) => {
     togglePause();
     return;
   }
-  if (paused || gameOver) return;
+  if (paused || gameOver || hardDropAnim) return;
   switch (e.code) {
     case "ArrowLeft":
       if (!collide(current.shape, current.x - 1, current.y)) current.x--;
