@@ -66,6 +66,18 @@ const SLIDE_TAU = 35; // ms, smoothing time constant for the row-to-row slide
 const HARD_DROP_MS = 120; // duration of the hard drop fall animation
 const TRAIL_COPIES = 4; // fading copies drawn behind a hard-dropping piece
 
+const SPECIAL_EVERY = 5; // lines between special (powerup) pieces
+const FREEZE_MS = 5000; // how long the freeze powerup pauses gravity
+const BLOCK_CLEAR_SCORE = 10; // points per block destroyed by a powerup (× level)
+const FLASH_MS = 250; // fade-out of the flash over cells hit by a powerup
+const SPECIALS = {
+  bomb: { icon: "💣", color: "#ef5350" },
+  bolt: { icon: "⚡", color: "#fff176" },
+  tint: { icon: "🎨", color: "#f48fb1" },
+  gravity: { icon: "⬇", color: "#7986cb" },
+  freeze: { icon: "❄", color: "#80deea" },
+};
+
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const nextCanvas = document.getElementById("next-canvas");
@@ -73,6 +85,7 @@ const nextCtx = nextCanvas.getContext("2d");
 const scoreEl = document.getElementById("score");
 const linesEl = document.getElementById("lines");
 const levelEl = document.getElementById("level");
+const powerEl = document.getElementById("power");
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
 const overlayScore = document.getElementById("overlay-score");
@@ -114,7 +127,11 @@ let board,
   dropInterval,
   animId,
   renderY, // visual (fractional) row of the current piece; logic uses current.y
-  hardDropAnim; // { fromY, toY, elapsed } while a hard drop is animating, else null
+  hardDropAnim, // { fromY, toY, elapsed } while a hard drop is animating, else null
+  nextSpecialAt, // line count at which the next special piece is queued
+  pendingSpecial, // true when the next generated piece must be special
+  freezeTimer, // ms of gravity pause left from the freeze powerup
+  flash; // { cells: [[r, c]...], elapsed } while a powerup flash is fading, else null
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -127,6 +144,17 @@ function randomPiece() {
     type,
     shape,
     x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2),
+    y: 0,
+  };
+}
+
+function randomSpecial() {
+  const keys = Object.keys(SPECIALS);
+  return {
+    type: 0,
+    special: keys[Math.floor(Math.random() * keys.length)],
+    shape: [[1]],
+    x: Math.floor(COLS / 2),
     y: 0,
   };
 }
@@ -182,13 +210,100 @@ function clearLines() {
       r++;
     }
   }
-  if (cleared) {
-    lines += cleared;
-    score += (LINE_SCORES[cleared] || 0) * level;
-    level = Math.floor(lines / 10) + 1;
-    dropInterval = Math.max(100, 1000 - (level - 1) * 90);
-    updateHUD();
+  if (cleared) awardLines(cleared);
+}
+
+function awardLines(n) {
+  lines += n;
+  score += (LINE_SCORES[n] || 0) * level;
+  level = Math.floor(lines / 10) + 1;
+  dropInterval = Math.max(100, 1000 - (level - 1) * 90);
+  while (lines >= nextSpecialAt) {
+    pendingSpecial = true;
+    nextSpecialAt += SPECIAL_EVERY;
   }
+  updateHUD();
+}
+
+function clearCell(r, c, hit) {
+  if (!board[r][c]) return;
+  board[r][c] = 0;
+  hit.push([r, c]);
+}
+
+// drop every block in the given columns to the bottom, closing gaps
+function compactColumns(cols) {
+  for (const c of cols) {
+    let write = ROWS - 1;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (!board[r][c]) continue;
+      const v = board[r][c];
+      board[r][c] = 0;
+      board[write--][c] = v;
+    }
+  }
+}
+
+function mostFrequentColor() {
+  const counts = {};
+  let best = 0;
+  for (const row of board)
+    for (const v of row)
+      if (v && (counts[v] = (counts[v] || 0) + 1) > (counts[best] || 0))
+        best = v;
+  return best;
+}
+
+function applySpecial() {
+  const { x, y } = current;
+  const hit = [];
+  let flashCells = [];
+  switch (current.special) {
+    case "bomb":
+      for (let r = y - 1; r <= y + 1; r++)
+        for (let c = x - 1; c <= x + 1; c++) {
+          if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
+          clearCell(r, c, hit);
+          flashCells.push([r, c]);
+        }
+      break;
+    case "bolt":
+      for (let r = 0; r < ROWS; r++) {
+        clearCell(r, x, hit);
+        flashCells.push([r, x]);
+      }
+      for (let c = 0; c < COLS; c++) {
+        clearCell(y, c, hit);
+        flashCells.push([y, c]);
+      }
+      board.splice(y, 1);
+      board.unshift(new Array(COLS).fill(0));
+      awardLines(1);
+      break;
+    case "tint": {
+      const target = board[y + 1]?.[x] || mostFrequentColor();
+      if (!target) break;
+      const cols = new Set();
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++)
+          if (board[r][c] === target) {
+            clearCell(r, c, hit);
+            cols.add(c);
+          }
+      flashCells = hit;
+      compactColumns(cols);
+      break;
+    }
+    case "gravity":
+      compactColumns(board[0].keys());
+      break;
+    case "freeze":
+      freezeTimer = FREEZE_MS;
+      break;
+  }
+  score += hit.length * BLOCK_CLEAR_SCORE * level;
+  if (flashCells.length) flash = { cells: flashCells, elapsed: 0 };
+  updateHUD();
 }
 
 function ghostY() {
@@ -220,7 +335,8 @@ function softDrop() {
 }
 
 function lockPiece() {
-  merge();
+  if (current.special) applySpecial();
+  else merge();
   clearLines();
   spawn();
 }
@@ -228,7 +344,8 @@ function lockPiece() {
 function spawn() {
   current = next;
   renderY = current.y;
-  next = randomPiece();
+  next = pendingSpecial ? randomSpecial() : randomPiece();
+  pendingSpecial = false;
   if (collide(current.shape, current.x, current.y)) {
     endGame();
   }
@@ -239,6 +356,10 @@ function updateHUD() {
   scoreEl.textContent = score.toLocaleString();
   linesEl.textContent = lines;
   levelEl.textContent = level;
+  powerEl.textContent =
+    freezeTimer > 0
+      ? `❄ ${(freezeTimer / 1000).toFixed(1)}s`
+      : `en ${nextSpecialAt - lines}`;
 }
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
@@ -250,6 +371,19 @@ function drawBlock(context, x, y, colorIndex, size, alpha) {
   // highlight
   context.fillStyle = "rgba(255,255,255,0.12)";
   context.fillRect(x * size + 1, y * size + 1, size - 2, 4);
+  context.globalAlpha = 1;
+}
+
+function drawSpecialBlock(context, x, y, special, size, alpha) {
+  const { icon, color } = SPECIALS[special];
+  context.globalAlpha = alpha ?? 1;
+  context.fillStyle = color;
+  context.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
+  context.font = `${Math.floor(size * 0.6)}px sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#000";
+  context.fillText(icon, (x + 0.5) * size, (y + 0.5) * size + 1);
   context.globalAlpha = 1;
 }
 
@@ -280,6 +414,21 @@ function draw() {
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++) drawBlock(ctx, c, r, board[r][c], BLOCK);
 
+  // powerup flash over affected cells
+  if (flash) {
+    ctx.globalAlpha = 0.5 * (1 - flash.elapsed / FLASH_MS);
+    ctx.fillStyle = "#fff";
+    for (const [r, c] of flash.cells)
+      ctx.fillRect(c * BLOCK, r * BLOCK, BLOCK, BLOCK);
+    ctx.globalAlpha = 1;
+  }
+
+  // freeze tint
+  if (freezeTimer > 0) {
+    ctx.fillStyle = "rgba(128,222,234,0.08)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
   // ghost
   drawPiece(ghostY(), 0.2);
 
@@ -297,6 +446,10 @@ function draw() {
 }
 
 function drawPiece(y, alpha) {
+  if (current.special) {
+    drawSpecialBlock(ctx, current.x, y, current.special, BLOCK, alpha);
+    return;
+  }
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
       drawBlock(ctx, current.x + c, y + r, current.shape[r][c], BLOCK, alpha);
@@ -308,6 +461,11 @@ function drawNext() {
   const shape = next.shape;
   const offX = Math.floor((4 - shape[0].length) / 2);
   const offY = Math.floor((4 - shape.length) / 2);
+  if (next.special) {
+    // center the single cell in the 4×4 preview
+    drawSpecialBlock(nextCtx, 1.5, 1.5, next.special, NB);
+    return;
+  }
   for (let r = 0; r < shape.length; r++)
     for (let c = 0; c < shape[r].length; c++)
       drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
@@ -348,6 +506,9 @@ function loop(ts) {
       hardDropAnim = null;
       lockPiece();
     }
+  } else if (freezeTimer > 0) {
+    freezeTimer = Math.max(0, freezeTimer - dt);
+    updateHUD();
   } else {
     dropAccum += dt;
     if (dropAccum >= dropInterval) {
@@ -358,10 +519,13 @@ function loop(ts) {
         lockPiece();
       }
     }
+  }
+  if (!hardDropAnim) {
     // frame-rate independent exponential ease toward the logical row
     renderY += (current.y - renderY) * (1 - Math.exp(-dt / SLIDE_TAU));
     if (Math.abs(current.y - renderY) < 0.01) renderY = current.y;
   }
+  if (flash && (flash.elapsed += dt) >= FLASH_MS) flash = null;
   draw();
   // endGame() can't cancel the frame currently running, so stop rescheduling here
   if (gameOver) return;
@@ -378,6 +542,10 @@ function init() {
   dropInterval = 1000;
   dropAccum = 0;
   hardDropAnim = null;
+  nextSpecialAt = SPECIAL_EVERY;
+  pendingSpecial = false;
+  freezeTimer = 0;
+  flash = null;
   lastTime = performance.now();
   next = randomPiece();
   spawn();
